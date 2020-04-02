@@ -1,0 +1,121 @@
+%macro 
+			PSMatch(x1, x2, y, vartype, dset);
+	*propensity score matching macro;
+	data one;
+		set ps_p;
+		ranvar = ranuni(0);
+
+		if fyear=&y;
+	run;
+
+	proc sort data = one;
+		by &vartype ranvar;
+	run;
+
+	proc transpose data = one out = data1;
+		var _ALL_;
+		by &vartype;
+	run;
+
+	data id_t (rename=(COL1-COL&x1 = tid1-tid&x1));
+		set data1;
+
+		if &vartype = 1 and _NAME_ = 'GVKEY';
+	run;
+
+	data ps_t (rename=(COL1-COL&x1 = tps1-tps&x1));
+		set data1;
+
+		if &vartype = 1 and _NAME_ = 'ps_pred';
+	run;
+
+	data id_c (rename=(COL1-COL&x2 = cid1-cid&x2));
+		set data1;
+
+		if &vartype = 0 and _NAME_ = 'GVKEY';
+	run;
+
+	data ps_c (rename=(COL1-COL&x2 = cps1-cps&x2));
+		set data1;
+
+		if &vartype = 0 and _NAME_ = 'ps_pred';
+	run;
+
+	data all;
+		merge id_t ps_t id_c ps_c;
+		caliper = 0.05;
+
+		* Note: caliper for matching is specified here;
+		array treat_id {*} tid1-tid&x1;
+		array ctl_id {*} cid1-cid&x2;
+		array treat_p {*} tps1-tps&x1;
+		array ctl_p {*} cps1-cps&x2;
+		array used_i {*} used1 - used&x2;
+		array matched_t {*} m_tid1-m_tid&x1;
+		array matched_c {*} m_cid1-m_cid&x1;
+		match_N = 0;
+
+		do i = 1 to &x1;
+			min_diff = 1;
+			best_match = 0;
+
+			do j = 1 to &x2;
+				if used_i[j] = . then
+					do;
+						if ABS(treat_p[i] - ctl_p[j]) < caliper then
+							do;
+								if ABS(treat_p[i] - ctl_p[j]) < min_diff then
+									do;
+										min_diff = ABS(treat_p[i] - ctl_p[j]);
+										best_match = j;
+									end;
+							end;
+					end;
+			end;
+
+			if best_match > 0 then
+				do;
+					match_N = match_N + 1;
+					used_i[best_match] = 1;
+					matched_t[match_N] = treat_id[i];
+					matched_c[match_N] = ctl_id[best_match];
+				end;
+		end;
+
+	data matches;
+		set all;
+		array matched_t {*} m_tid1-m_tid&x1;
+		array matched_c {*} m_cid1-m_cid&x1;
+
+		do match = 1 to match_N;
+			Treatment_IDN = matched_t[match];
+			Control_IDN = matched_c[match];
+			output;
+		end;
+
+		keep match treatment_idn control_idn;
+
+	data matches;
+		set matches;
+
+		if Control_IDN^=.;
+		fyear=&y;
+	run;
+
+	proc sql;
+		create table MC1 as select 1 as MC, b.gvkey, b.fyear 
+			from Matches a left join &dset b
+				on (a.Treatment_IDN=b.num_gvkey) and (a.fyear=b.fyear);
+	quit;
+
+	proc sql;
+		create table MC2 as select 0 as MC, b.gvkey, b.fyear 
+			from Matches a left join &dset b
+				on (a.Control_IDN=b.num_gvkey) and (a.fyear=b.fyear);
+	quit;
+
+	data MC&y;
+		set MC1 MC2;
+	run;
+
+%mend PSMatch;
